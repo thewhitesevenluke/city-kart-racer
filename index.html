@@ -166,8 +166,9 @@ class Kart {
     this.speed=0;
     this.maxSpd=5.2; this.accel=0.16; this.fric=0.91; this.turn=0.042;
     this.color=KCOLORS[ci]; this.ci=ci; this.isP=isP;
-    this.wp=1; this.lap=0; this.lastSec=-1;
+    this.wp=1; this.lap=0; this.lastSec=2;
     this.pos=1; this.progress=0;
+    this.lapStarted=false; // prevent counting a lap before going far enough
     this.boost=false; this.boostT=0; this.boostBar=100;
     this.shield=false; this.shieldT=0;
     this.spin=0;
@@ -242,8 +243,12 @@ class Kart {
       const d = Math.hypot(this.x-WP[i].x, this.y-WP[i].y);
       if (d < best) { best=d; nearI=i; }
     }
-    if (nearI===0 && this.lastSec===NW-1) {
+    // Finish line is between WP[1] and WP[2] (same as start grid).
+    // Only count after kart has traveled to at least WP[8] (halfway round) first.
+    if (nearI >= 8) this.lapStarted = true;
+    if (nearI===2 && this.lastSec===1 && this.lapStarted) {
       this.lap++;
+      this.lapStarted = false;
       if (this.isP && this.lap < LAPS) flash(`LAP ${this.lap+1} / ${LAPS}`, '#ffee00', 42);
     }
     this.lastSec = nearI;
@@ -404,9 +409,9 @@ function drawTrack() {
   ctx.setLineDash([28,22]); path(); ctx.stroke();
   ctx.setLineDash([]);
 
-  // start/finish line (checkered)
-  const sf=WP[0], sn=WP[1];
-  const sa = Math.atan2(sn.y-sf.y, sn.x-sf.x) + Math.PI/2;
+  // start/finish line (checkered) — between WP[1] and WP[2], same as starting grid
+  const sf = {x:(WP[1].x+WP[2].x)/2, y:(WP[1].y+WP[2].y)/2};
+  const sa = Math.atan2(WP[2].y-WP[1].y, WP[2].x-WP[1].x) + Math.PI/2;
   ctx.save(); ctx.translate(sf.x, sf.y); ctx.rotate(sa);
   for (let r=-4;r<4;r++) for (let c=0;c<7;c++) {
     ctx.fillStyle = (r+c)%2===0 ? '#fff' : '#000';
