@@ -362,7 +362,7 @@ function nearestWPAhead(kart) {
 }
 
 function init() {
-  genBuildings(); spawnPups();
+  genBuildings();
   karts = [];
   // Start on the straight between WP[1] and WP[2], NOT at the hairpin WP[0]
   const a = WP[1], b = WP[2];
@@ -581,7 +581,7 @@ function loop(ts) {
   ctx.translate(W/2 - cam.x, H/2 - cam.y);
   drawBuildings();
   drawTrack();
-  drawPups();
+
   karts.forEach(k=>k.draw());
   ctx.restore();
 
@@ -591,8 +591,7 @@ function loop(ts) {
     if (cdTimer<=0) state='racing';
     drawCountdown();
   } else if (state==='racing') {
-    for (const p of pups) { if (p.gone) { p.respawn-=dt; if(p.respawn<=0) p.gone=false; } }
-    karts.forEach(k=>{ k.update(keys,dt); k.hitPup(); });
+    karts.forEach(k=>{ k.update(keys,dt); });
     updatePositions();
     if (pl.lap >= LAPS) state='finished';
     for (let i=msgs.length-1; i>=0; i--) { msgs[i].t-=dt; if(msgs[i].t<=0) msgs.splice(i,1); }
