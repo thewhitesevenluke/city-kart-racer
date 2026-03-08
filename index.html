@@ -189,7 +189,9 @@ class Kart {
     if (!this.boost && this.boostBar < 100) this.boostBar = Math.min(100, this.boostBar+0.2);
     if (this.boost) { this.boostT -= dt; if (this.boostT <= 0) this.boost = false; }
     if (this.shield) { this.shieldT -= dt; if (this.shieldT <= 0) this.shield = false; }
-    enforceRoad(this);
+    // Only enforce road wall for player — AI follows waypoints and doesn't need it
+    // (road enforcement at the hairpin start causes AI to fight itself)
+    if (this.isP) enforceRoad(this);
     enforceBuildings(this);
     this.calcProgress();
   }
@@ -214,15 +216,14 @@ class Kart {
   inputAI(dt) {
     const tgt = WP[this.wp];
     const dx = tgt.x-this.x, dy = tgt.y-this.y;
-    if (Math.hypot(dx, dy) < 60) this.wp = (this.wp+1)%NW;
+    if (Math.hypot(dx, dy) < 80) this.wp = (this.wp+1)%NW;
 
     const ta = Math.atan2(dx, -dy);
     let diff = ta - this.angle;
     while (diff >  Math.PI) diff -= Math.PI*2;
     while (diff < -Math.PI) diff += Math.PI*2;
 
-    // FIXED: was 0.12 (too weak) — now 0.8 so AI actually turns properly
-    const turnAmt = Math.max(-this.turn*2, Math.min(this.turn*2, diff*0.8));
+    const turnAmt = Math.max(-this.turn*2, Math.min(this.turn*2, diff*0.5));
     this.angle += turnAmt;
 
     const corner = Math.abs(diff) > 0.5 ? 0.65 : 1.0;
@@ -358,16 +359,20 @@ function nearestWPAhead(kart) {
 function init() {
   genBuildings(); spawnPups();
   karts = [];
-  const s=WP[0], nxt=WP[1];
-  const dir   = Math.atan2(nxt.x-s.x, -(nxt.y-s.y));
-  const perp  = dir + Math.PI/2;
-  const grid  = [[0,-1],[1,-1],[-1,0],[1,0],[0,0]];
+  // Start on the straight between WP[1] and WP[2], NOT at the hairpin WP[0]
+  const a = WP[1], b = WP[2];
+  const dir  = Math.atan2(b.x-a.x, -(b.y-a.y));
+  const perp = dir + Math.PI/2;
+  // mid-point of WP[1]→WP[2] segment
+  const sx = (a.x+b.x)/2, sy = (a.y+b.y)/2;
+  // 2x2 grid + center, staggered along the straight
+  const grid = [[0,0],[1,-1],[-1,-1],[1,1],[-1,1]];
   for (let i=0;i<5;i++) {
     const [col,row] = grid[i];
-    const x = s.x + Math.cos(perp)*col*34 + Math.sin(dir)*row*46;
-    const y = s.y + Math.sin(perp)*col*34 - Math.cos(dir)*row*46;
+    const x = sx + Math.cos(perp)*col*34 + Math.sin(dir)*row*40;
+    const y = sy + Math.sin(perp)*col*34 - Math.cos(dir)*row*40;
     const k = new Kart(x, y, dir, i, i===0);
-    k.wp = nearestWPAhead(k); // FIXED: each kart starts targeting its correct next WP
+    k.wp = nearestWPAhead(k);
     karts.push(k);
   }
   cam = {x: karts[0].x, y: karts[0].y};
