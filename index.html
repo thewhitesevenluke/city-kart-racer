@@ -187,7 +187,7 @@ class Kart {
       return;
     }
     this.isP ? this.inputPlayer(keys, dt) : this.inputAI(dt);
-    if (!this.boost && this.boostBar < 100) this.boostBar = Math.min(100, this.boostBar+0.2);
+    if (!this.boost && this.boostBar < 100) this.boostBar = Math.min(100, this.boostBar+0.6);
     if (this.boost) { this.boostT -= dt; if (this.boostT <= 0) this.boost = false; }
     if (this.shield) { this.shieldT -= dt; if (this.shieldT <= 0) this.shield = false; }
     // Only enforce road wall for player — AI follows waypoints and doesn't need it
@@ -255,21 +255,6 @@ class Kart {
     this.progress = this.lap + nearI/NW;
   }
 
-  hitPup() {
-    for (const p of pups) {
-      if (p.gone) continue;
-      if (Math.hypot(this.x-p.x, this.y-p.y) < 26) {
-        p.gone=true; p.respawn=9000;
-        if      (p.type==='boost')  { this.boost=true; this.boostT=3000; this.boostBar=0; }
-        else if (p.type==='shield') { this.shield=true; this.shieldT=5000; }
-        else if (p.type==='bomb') {
-          for (const k of karts)
-            if (k!==this && !k.shield && Math.hypot(k.x-this.x,k.y-this.y)<180) k.spin=1200;
-        }
-        if (this.isP) flash(p.label, p.color);
-      }
-    }
-  }
 
   draw() {
     ctx.save();
