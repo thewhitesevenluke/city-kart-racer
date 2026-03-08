@@ -22,18 +22,8 @@ body {
   text-shadow: 0 0 15px #ff6b00;
   margin-bottom: 8px;
 }
-canvas {
-  display: block;
-  border: 3px solid #ff6b00;
-  border-radius: 4px;
-  box-shadow: 0 0 40px rgba(255,107,0,0.4);
-}
-#controls {
-  color: #666;
-  font-size: 12px;
-  margin-top: 6px;
-  letter-spacing: 1px;
-}
+canvas { display: block; border: 3px solid #ff6b00; border-radius: 4px; box-shadow: 0 0 40px rgba(255,107,0,0.4); }
+#controls { color: #555; font-size: 12px; margin-top: 6px; letter-spacing: 1px; }
 </style>
 </head>
 <body>
@@ -46,7 +36,9 @@ const ctx = canvas.getContext('2d');
 const W = canvas.width, H = canvas.height;
 
 // ─── TRACK ───────────────────────────────────────────────────────────────────
-const TRACK_W = 130;
+const TRACK_W = 140;
+const WALL = TRACK_W / 2 - 6; // hard boundary distance from centerline
+
 const WP = [
   {x:500,  y:620},
   {x:850,  y:600},
@@ -71,468 +63,548 @@ const WP = [
 ];
 const NW = WP.length;
 
-function segDist(px,py,ax,ay,bx,by) {
-  const dx=bx-ax, dy=by-ay, l2=dx*dx+dy*dy;
-  if(l2===0) return Math.hypot(px-ax,py-ay);
-  const t=Math.max(0,Math.min(1,((px-ax)*dx+(py-ay)*dy)/l2));
-  return Math.hypot(px-(ax+t*dx), py-(ay+t*dy));
-}
-function onTrack(x,y) {
-  for(let i=0;i<NW;i++){
-    const a=WP[i],b=WP[(i+1)%NW];
-    if(segDist(x,y,a.x,a.y,b.x,b.y)<TRACK_W/2) return true;
+// Returns {dist, nearX, nearY} for closest point on any track segment
+function nearestOnTrack(px, py) {
+  let minD = Infinity, nx = px, ny = py;
+  for (let i = 0; i < NW; i++) {
+    const a = WP[i], b = WP[(i+1)%NW];
+    const dx = b.x-a.x, dy = b.y-a.y, l2 = dx*dx+dy*dy;
+    const t = Math.max(0, Math.min(1, ((px-a.x)*dx+(py-a.y)*dy)/l2));
+    const cx = a.x+t*dx, cy = a.y+t*dy;
+    const d = Math.hypot(px-cx, py-cy);
+    if (d < minD) { minD=d; nx=cx; ny=cy; }
   }
-  return false;
+  return {dist: minD, nx, ny};
+}
+
+// Hard road boundary — push kart back inside
+function enforceRoad(kart) {
+  const {dist, nx, ny} = nearestOnTrack(kart.x, kart.y);
+  if (dist > WALL && dist > 0.1) {
+    const ex = (kart.x - nx) / dist;
+    const ey = (kart.y - ny) / dist;
+    kart.x = nx + ex * WALL;
+    kart.y = ny + ey * WALL;
+    // reflect speed if heading outward
+    const outwardVel = kart.speed * (Math.sin(kart.angle)*ex - Math.cos(kart.angle)*ey);
+    if (outwardVel > 0) kart.speed *= -0.25;
+  }
 }
 
 // ─── BUILDINGS ───────────────────────────────────────────────────────────────
-const BCOLORS=['#c0392b','#2980b9','#27ae60','#8e44ad','#e67e22','#16a085','#34495e','#7f8c8d','#d35400'];
-const buildings=[];
-function genBuildings(){
-  buildings.length=0;
-  for(let t=0;t<400;t++){
-    const w=50+Math.random()*110, h=40+Math.random()*130;
-    const x=-200+Math.random()*2000, y=-200+Math.random()*1500;
-    const pts=[[x,y],[x+w,y],[x,y+h],[x+w,y+h],[x+w/2,y+h/2]];
-    if(pts.some(([cx,cy])=>onTrack(cx,cy))) continue;
-    const wins=[];
-    for(let r=0;r<Math.floor(h/15);r++)
-      for(let c=0;c<3;c++)
-        wins.push({x:x+5+c*(w/3-1),y:y+5+r*15,on:Math.random()>0.25});
-    buildings.push({x,y,w,h,color:BCOLORS[Math.floor(Math.random()*BCOLORS.length)],wins});
+const BCOLORS = ['#c0392b','#2980b9','#27ae60','#8e44ad','#e67e22','#16a085','#34495e','#7f8c8d','#d35400'];
+const buildings = [];
+
+function genBuildings() {
+  buildings.length = 0;
+  for (let t = 0; t < 400; t++) {
+    const w = 55+Math.random()*110, h = 45+Math.random()*130;
+    const x = -200+Math.random()*2000, y = -200+Math.random()*1500;
+    // reject if any corner or center is on the track
+    const chk = [[x,y],[x+w,y],[x,y+h],[x+w,y+h],[x+w/2,y+h/2]];
+    if (chk.some(([cx,cy]) => nearestOnTrack(cx,cy).dist < TRACK_W/2+18)) continue;
+    const wins = [];
+    for (let r = 0; r < Math.floor(h/15); r++)
+      for (let c = 0; c < 3; c++)
+        wins.push({x: x+5+c*(w/3-1), y: y+5+r*15, on: Math.random()>0.25});
+    buildings.push({x, y, w, h, color: BCOLORS[Math.floor(Math.random()*BCOLORS.length)], wins});
   }
 }
 
-// ─── POWER-UPS ───────────────────────────────────────────────────────────────
-const PUTYPES=[
-  {type:'boost',  color:'#ff8800', label:'TURBO BOOST!'},
-  {type:'shield', color:'#00aaff', label:'SHIELD!'},
-  {type:'bomb',   color:'#ff2244', label:'OIL SLICK!'},
-];
-const pups=[];
-function spawnPups(){
-  pups.length=0;
-  for(let i=0;i<NW;i++){
-    const a=WP[i],b=WP[(i+1)%NW];
-    for(let j=0;j<2;j++){
-      const tt=0.2+j*0.6;
-      const mx=a.x+(b.x-a.x)*tt, my=a.y+(b.y-a.y)*tt;
-      const ang=Math.atan2(b.y-a.y,b.x-a.x)+Math.PI/2;
-      const off=(Math.random()-0.5)*70;
-      const pt=PUTYPES[Math.floor(Math.random()*PUTYPES.length)];
-      pups.push({x:mx+Math.cos(ang)*off,y:my+Math.sin(ang)*off,...pt,gone:false,respawn:0});
+// Push kart out of any building it overlaps
+function enforceBuildings(kart) {
+  const r = 14;
+  for (const b of buildings) {
+    if (kart.x+r > b.x && kart.x-r < b.x+b.w && kart.y+r > b.y && kart.y-r < b.y+b.h) {
+      const dl = (kart.x+r) - b.x;
+      const dr = (b.x+b.w) - (kart.x-r);
+      const dt = (kart.y+r) - b.y;
+      const db = (b.y+b.h) - (kart.y-r);
+      const mn = Math.min(dl, dr, dt, db);
+      if      (mn===dl) kart.x = b.x - r;
+      else if (mn===dr) kart.x = b.x+b.w+r;
+      else if (mn===dt) kart.y = b.y - r;
+      else              kart.y = b.y+b.h+r;
+      kart.speed *= 0.15;
     }
   }
 }
 
-// ─── OBSTACLES ───────────────────────────────────────────────────────────────
-const obs=[];
-function spawnObs(){
-  obs.length=0;
-  for(let i=0;i<NW;i++){
-    const a=WP[i],b=WP[(i+1)%NW];
-    const ang=Math.atan2(b.y-a.y,b.x-a.x)+Math.PI/2;
-    for(let j=0;j<3;j++){
-      const tt=0.12+j*0.28;
-      const mx=a.x+(b.x-a.x)*tt, my=a.y+(b.y-a.y)*tt;
-      const side=(Math.random()>0.5?1:-1)*(38+Math.random()*18);
-      const type=Math.random()>0.45?'cone':'barrier';
-      obs.push({x:mx+Math.cos(ang)*side, y:my+Math.sin(ang)*side, type, r:type==='cone'?10:14});
+// ─── POWER-UPS ───────────────────────────────────────────────────────────────
+const PUTYPES = [
+  {type:'boost',  color:'#ff8800', label:'TURBO BOOST!'},
+  {type:'shield', color:'#00aaff', label:'SHIELD!'},
+  {type:'bomb',   color:'#ff2244', label:'OIL SLICK!'},
+];
+const pups = [];
+function spawnPups() {
+  pups.length = 0;
+  for (let i = 0; i < NW; i++) {
+    const a = WP[i], b = WP[(i+1)%NW];
+    for (let j = 0; j < 2; j++) {
+      const tt = 0.25+j*0.5;
+      const mx = a.x+(b.x-a.x)*tt, my = a.y+(b.y-a.y)*tt;
+      const ang = Math.atan2(b.y-a.y, b.x-a.x)+Math.PI/2;
+      const off = (Math.random()-0.5)*55;
+      const pt = PUTYPES[Math.floor(Math.random()*PUTYPES.length)];
+      pups.push({x: mx+Math.cos(ang)*off, y: my+Math.sin(ang)*off, ...pt, gone:false, respawn:0});
     }
   }
 }
 
 // ─── MESSAGES ────────────────────────────────────────────────────────────────
-const msgs=[];
-function flash(text,color){msgs.push({text,color,t:1800});}
+const msgs = [];
+function flash(text, color, size=34) { msgs.push({text, color, size, t:2000}); }
 
 // ─── KART ────────────────────────────────────────────────────────────────────
-const KCOLORS=['#ff4444','#44ff88','#4488ff','#ffee44','#ff44ee'];
-const KNAMES=['YOU','REX','ZAP','MOE','KAI'];
+const KCOLORS = ['#ff4444','#44ff88','#4488ff','#ffee44','#ff44ee'];
+const KNAMES  = ['YOU','REX','ZAP','MOE','KAI'];
 
 class Kart {
-  constructor(x,y,angle,ci,isP){
+  constructor(x, y, angle, ci, isP) {
     this.x=x; this.y=y; this.angle=angle;
-    this.vx=0; this.vy=0; this.speed=0;
+    this.speed=0;
     this.maxSpd=5.2; this.accel=0.16; this.fric=0.91; this.turn=0.042;
     this.color=KCOLORS[ci]; this.ci=ci; this.isP=isP;
-    this.wp=1; this.sector=-1; this.lap=0; this.lastSec=-1;
+    this.wp=1; this.lap=0; this.lastSec=-1;
     this.pos=1; this.progress=0;
     this.boost=false; this.boostT=0; this.boostBar=100;
     this.shield=false; this.shieldT=0;
-    this.spin=0; this.offT=0;
-    this.W=22; this.H=32;
+    this.spin=0;
+    this.W=22; this.H=34;
   }
-  get topSpd(){ return this.maxSpd*(this.boost?1.85:1)*(this.offT>0?0.55:1); }
+  get topSpd() { return this.maxSpd * (this.boost ? 1.85 : 1); }
 
-  update(keys,dt){
-    if(this.spin>0){
-      this.spin-=dt; this.angle+=0.12; this.speed*=0.94;
-      this.x+=Math.sin(this.angle)*this.speed;
-      this.y-=Math.cos(this.angle)*this.speed;
+  update(keys, dt) {
+    if (this.spin > 0) {
+      this.spin -= dt;
+      this.angle += 0.13;
+      this.speed *= 0.93;
+      this.x += Math.sin(this.angle)*this.speed;
+      this.y -= Math.cos(this.angle)*this.speed;
+      enforceRoad(this);
       return;
     }
-    this.isP ? this.inputPlayer(keys,dt) : this.inputAI(dt);
-    if(!this.boost && this.boostBar<100) this.boostBar=Math.min(100,this.boostBar+0.18);
-    if(this.boost){ this.boostT-=dt; if(this.boostT<=0) this.boost=false; }
-    if(this.shield){ this.shieldT-=dt; if(this.shieldT<=0) this.shield=false; }
-    this.offT = onTrack(this.x,this.y) ? 0 : Math.min(this.offT+dt,1000);
+    this.isP ? this.inputPlayer(keys, dt) : this.inputAI(dt);
+    if (!this.boost && this.boostBar < 100) this.boostBar = Math.min(100, this.boostBar+0.2);
+    if (this.boost) { this.boostT -= dt; if (this.boostT <= 0) this.boost = false; }
+    if (this.shield) { this.shieldT -= dt; if (this.shieldT <= 0) this.shield = false; }
+    enforceRoad(this);
+    enforceBuildings(this);
     this.calcProgress();
   }
 
-  inputPlayer(keys,dt){
-    const ms=this.topSpd;
-    if(keys['KeyW']||keys['ArrowUp'])   this.speed=Math.min(ms, this.speed+this.accel);
-    else if(keys['KeyS']||keys['ArrowDown']) this.speed=Math.max(-ms*0.5, this.speed-this.accel);
-    else this.speed*=this.fric;
-    if(Math.abs(this.speed)>0.3){
-      const tf=this.turn*(Math.abs(this.speed)/this.maxSpd);
-      if(keys['KeyA']||keys['ArrowLeft'])  this.angle-=tf;
-      if(keys['KeyD']||keys['ArrowRight']) this.angle+=tf;
+  inputPlayer(keys, dt) {
+    const ms = this.topSpd;
+    if      (keys['KeyW']||keys['ArrowUp'])   this.speed = Math.min(ms, this.speed+this.accel);
+    else if (keys['KeyS']||keys['ArrowDown']) this.speed = Math.max(-ms*0.5, this.speed-this.accel);
+    else                                       this.speed *= this.fric;
+    if (Math.abs(this.speed) > 0.3) {
+      const tf = this.turn * (Math.abs(this.speed)/this.maxSpd);
+      if (keys['KeyA']||keys['ArrowLeft'])  this.angle -= tf;
+      if (keys['KeyD']||keys['ArrowRight']) this.angle += tf;
     }
-    if((keys['ShiftLeft']||keys['ShiftRight']||keys['Space'])&&this.boostBar>=25&&!this.boost){
+    if ((keys['ShiftLeft']||keys['ShiftRight']||keys['Space']) && this.boostBar>=25 && !this.boost) {
       this.boost=true; this.boostT=2200; this.boostBar=0;
     }
-    this.x+=Math.sin(this.angle)*this.speed;
-    this.y-=Math.cos(this.angle)*this.speed;
+    this.x += Math.sin(this.angle)*this.speed;
+    this.y -= Math.cos(this.angle)*this.speed;
   }
 
-  inputAI(dt){
-    const tgt=WP[this.wp];
-    const dx=tgt.x-this.x, dy=tgt.y-this.y;
-    if(Math.hypot(dx,dy)<65) this.wp=(this.wp+1)%NW;
-    const ta=Math.atan2(dx,-dy);
-    let diff=ta-this.angle;
-    while(diff>Math.PI)  diff-=Math.PI*2;
-    while(diff<-Math.PI) diff+=Math.PI*2;
-    this.angle+=Math.max(-this.turn*1.1,Math.min(this.turn*1.1,diff*0.12));
-    const corner=Math.abs(diff)>0.6?0.62:1;
-    const target=this.topSpd*corner*(0.88+Math.random()*0.04);
-    this.speed+=(target-this.speed)*0.055;
-    if(Math.random()<0.0008&&this.boostBar>50){this.boost=true;this.boostT=2000;this.boostBar=0;}
-    this.x+=Math.sin(this.angle)*this.speed;
-    this.y-=Math.cos(this.angle)*this.speed;
+  inputAI(dt) {
+    const tgt = WP[this.wp];
+    const dx = tgt.x-this.x, dy = tgt.y-this.y;
+    if (Math.hypot(dx, dy) < 60) this.wp = (this.wp+1)%NW;
+
+    const ta = Math.atan2(dx, -dy);
+    let diff = ta - this.angle;
+    while (diff >  Math.PI) diff -= Math.PI*2;
+    while (diff < -Math.PI) diff += Math.PI*2;
+
+    // FIXED: was 0.12 (too weak) — now 0.8 so AI actually turns properly
+    const turnAmt = Math.max(-this.turn*2, Math.min(this.turn*2, diff*0.8));
+    this.angle += turnAmt;
+
+    const corner = Math.abs(diff) > 0.5 ? 0.65 : 1.0;
+    const targetSpd = this.topSpd * corner * (0.87 + Math.random()*0.06);
+    this.speed += (targetSpd - this.speed) * 0.06;
+
+    if (Math.random()<0.0009 && this.boostBar>50) { this.boost=true; this.boostT=2000; this.boostBar=0; }
+
+    this.x += Math.sin(this.angle)*this.speed;
+    this.y -= Math.cos(this.angle)*this.speed;
   }
 
-  calcProgress(){
-    let best=Infinity, nearI=0;
-    for(let i=0;i<NW;i++){
-      const d=Math.hypot(this.x-WP[i].x,this.y-WP[i].y);
-      if(d<best){best=d;nearI=i;}
+  calcProgress() {
+    let best = Infinity, nearI = 0;
+    for (let i = 0; i < NW; i++) {
+      const d = Math.hypot(this.x-WP[i].x, this.y-WP[i].y);
+      if (d < best) { best=d; nearI=i; }
     }
-    if(nearI===0&&this.lastSec===NW-1) this.lap++;
-    this.lastSec=nearI;
-    this.progress=this.lap+nearI/NW;
+    if (nearI===0 && this.lastSec===NW-1) {
+      this.lap++;
+      if (this.isP && this.lap < LAPS) flash(`LAP ${this.lap+1} / ${LAPS}`, '#ffee00', 42);
+    }
+    this.lastSec = nearI;
+    this.progress = this.lap + nearI/NW;
   }
 
-  hitPup(){
-    for(const p of pups){
-      if(p.gone) continue;
-      if(Math.hypot(this.x-p.x,this.y-p.y)<26){
+  hitPup() {
+    for (const p of pups) {
+      if (p.gone) continue;
+      if (Math.hypot(this.x-p.x, this.y-p.y) < 26) {
         p.gone=true; p.respawn=9000;
-        if(p.type==='boost'){ this.boost=true; this.boostT=3000; this.boostBar=0; }
-        else if(p.type==='shield'){ this.shield=true; this.shieldT=5000; }
-        else if(p.type==='bomb'){
-          for(const k of karts)
-            if(k!==this&&!k.shield&&Math.hypot(k.x-this.x,k.y-this.y)<180) k.spin=1200;
+        if      (p.type==='boost')  { this.boost=true; this.boostT=3000; this.boostBar=0; }
+        else if (p.type==='shield') { this.shield=true; this.shieldT=5000; }
+        else if (p.type==='bomb') {
+          for (const k of karts)
+            if (k!==this && !k.shield && Math.hypot(k.x-this.x,k.y-this.y)<180) k.spin=1200;
         }
-        if(this.isP) flash(p.label, p.color);
+        if (this.isP) flash(p.label, p.color);
       }
     }
   }
 
-  hitObs(){
-    for(const o of obs){
-      if(Math.hypot(this.x-o.x,this.y-o.y)<o.r+12){
-        if(this.shield) continue;
-        this.speed*=-0.25;
-        if(o.type==='cone') this.spin=700;
-        else { this.speed*=0; this.x-=Math.sin(this.angle)*8; this.y+=Math.cos(this.angle)*8; }
-      }
-    }
-  }
-
-  draw(){
+  draw() {
     ctx.save();
-    ctx.translate(this.x,this.y);
+    ctx.translate(this.x, this.y);
     ctx.rotate(this.angle);
-    // shadow
-    ctx.fillStyle='rgba(0,0,0,0.3)';
-    ctx.beginPath(); ctx.ellipse(3,6,this.W/2,this.H/3,0,0,Math.PI*2); ctx.fill();
-    // body
-    ctx.fillStyle=this.color;
-    ctx.beginPath(); ctx.roundRect(-this.W/2,-this.H/2,this.W,this.H,5); ctx.fill();
-    // cockpit
-    ctx.fillStyle='rgba(0,0,0,0.55)';
-    ctx.beginPath(); ctx.roundRect(-7,-9,14,12,3); ctx.fill();
-    // front bumper
-    ctx.fillStyle='#ddd';
-    ctx.fillRect(-this.W/2,-this.H/2-4,this.W,5);
+
+    const W2 = this.W/2, H2 = this.H/2;
+
+    // drop shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.28)';
+    ctx.beginPath(); ctx.ellipse(3, 5, W2, H2*0.6, 0, 0, Math.PI*2); ctx.fill();
+
+    // body — POINTED front (top = -Y = forward direction)
+    ctx.fillStyle = this.color;
+    ctx.beginPath();
+    ctx.moveTo(0,      -H2);       // front tip (pointed)
+    ctx.lineTo( W2,    -H2*0.35);  // front-right shoulder
+    ctx.lineTo( W2,     H2);       // back-right
+    ctx.lineTo(-W2,     H2);       // back-left
+    ctx.lineTo(-W2,    -H2*0.35);  // front-left shoulder
+    ctx.closePath();
+    ctx.fill();
+
+    // cockpit (dark visor)
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.beginPath(); ctx.roundRect(-6, -H2*0.2, 12, 13, 3); ctx.fill();
+
+    // HEADLIGHTS — bright yellow at front tip
+    ctx.fillStyle = '#ffff66';
+    ctx.shadowColor = '#ffff00'; ctx.shadowBlur = 8;
+    ctx.beginPath(); ctx.arc(-W2+4, -H2*0.15, 4, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc( W2-4, -H2*0.15, 4, 0, Math.PI*2); ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // TAILLIGHTS — red at back
+    ctx.fillStyle = '#ff1111';
+    ctx.fillRect(-W2+1, H2-5, 8, 4);
+    ctx.fillRect( W2-9, H2-5, 8, 4);
+
     // wheels
-    ctx.fillStyle='#1a1a1a';
-    [[-this.W/2-5,-this.H/2+2],[this.W/2-1,-this.H/2+2],
-     [-this.W/2-5, this.H/2-12],[this.W/2-1, this.H/2-12]].forEach(([wx,wy])=>{
-      ctx.fillRect(wx,wy,6,10);
+    ctx.fillStyle = '#1a1a1a';
+    [[-W2-5, -H2+3], [W2-1, -H2+3], [-W2-5, H2-13], [W2-1, H2-13]].forEach(([wx,wy]) => {
+      ctx.fillRect(wx, wy, 6, 10);
     });
+
     // boost flame
-    if(this.boost){
-      ctx.fillStyle=`rgba(255,${80+Math.random()*120|0},0,0.85)`;
+    if (this.boost) {
+      ctx.fillStyle = `rgba(255,${80+Math.random()*120|0},0,0.85)`;
       ctx.beginPath();
-      ctx.moveTo(-7,this.H/2); ctx.lineTo(7,this.H/2);
-      ctx.lineTo(0,this.H/2+12+Math.random()*10); ctx.fill();
+      ctx.moveTo(-7, H2); ctx.lineTo(7, H2);
+      ctx.lineTo(0, H2+12+Math.random()*10); ctx.fill();
     }
+
     // shield ring
-    if(this.shield){
-      ctx.strokeStyle='rgba(0,180,255,0.75)'; ctx.lineWidth=3;
-      ctx.beginPath(); ctx.ellipse(0,0,this.W,this.H,0,0,Math.PI*2); ctx.stroke();
+    if (this.shield) {
+      ctx.strokeStyle = 'rgba(0,180,255,0.8)'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.ellipse(0, 0, this.W, this.H, 0, 0, Math.PI*2); ctx.stroke();
     }
+
     ctx.restore();
-    // name label
-    ctx.fillStyle=this.isP?'#ffee00':'#ffffff';
-    ctx.font=`bold 10px Arial`;
-    ctx.textAlign='center';
-    ctx.fillText(KNAMES[this.ci],this.x,this.y-this.H/2-6);
+
+    // name label (world space)
+    ctx.fillStyle = this.isP ? '#ffee00' : '#ffffff';
+    ctx.font = 'bold 10px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText(KNAMES[this.ci], this.x, this.y - this.H/2 - 7);
   }
 }
 
 // ─── GAME STATE ──────────────────────────────────────────────────────────────
-let karts=[], keys={}, cam={x:500,y:600};
-let state='countdown'; // countdown | racing | finished
-let cdTimer=3800, cdNum=3;
-const LAPS=3;
+let karts=[], keys={}, cam={x:500, y:600};
+let state='countdown';
+let cdTimer=3800;
+const LAPS = 3;
 let animId, lastT=0;
 
-function ordinal(n){const s=['th','st','nd','rd'],v=n%100;return n+(s[(v-20)%10]||s[v]||s[0]);}
+function ordinal(n) {
+  const s=['th','st','nd','rd'], v=n%100;
+  return n + (s[(v-20)%10] || s[v] || s[0]);
+}
 
-function init(){
-  genBuildings(); spawnPups(); spawnObs();
-  karts=[];
-  const s=WP[0],nxt=WP[1];
-  const dir=Math.atan2(nxt.x-s.x,-(nxt.y-s.y));
-  const perp=dir+Math.PI/2;
-  // stagger start grid
-  const grid=[[0,-1],[1,-1],[-1,0],[1,0],[0,0]];
-  for(let i=0;i<5;i++){
-    const [col,row]=grid[i];
-    const x=s.x+Math.cos(perp)*col*34+Math.sin(dir)*row*46;
-    const y=s.y+Math.sin(perp)*col*34-Math.cos(dir)*row*46;
-    karts.push(new Kart(x,y,dir,i,i===0));
+// Find nearest waypoint ahead for a kart (so AI starts with correct target)
+function nearestWPAhead(kart) {
+  let best=0, minD=Infinity;
+  for (let i=0;i<NW;i++) {
+    const d = Math.hypot(kart.x-WP[i].x, kart.y-WP[i].y);
+    if (d < minD) { minD=d; best=i; }
   }
-  cam={x:karts[0].x,y:karts[0].y};
-  state='countdown'; cdTimer=3800; cdNum=3;
+  return (best+1)%NW;
+}
+
+function init() {
+  genBuildings(); spawnPups();
+  karts = [];
+  const s=WP[0], nxt=WP[1];
+  const dir   = Math.atan2(nxt.x-s.x, -(nxt.y-s.y));
+  const perp  = dir + Math.PI/2;
+  const grid  = [[0,-1],[1,-1],[-1,0],[1,0],[0,0]];
+  for (let i=0;i<5;i++) {
+    const [col,row] = grid[i];
+    const x = s.x + Math.cos(perp)*col*34 + Math.sin(dir)*row*46;
+    const y = s.y + Math.sin(perp)*col*34 - Math.cos(dir)*row*46;
+    const k = new Kart(x, y, dir, i, i===0);
+    k.wp = nearestWPAhead(k); // FIXED: each kart starts targeting its correct next WP
+    karts.push(k);
+  }
+  cam = {x: karts[0].x, y: karts[0].y};
+  state='countdown'; cdTimer=3800;
   msgs.length=0;
 }
 
-function updatePositions(){
+function updatePositions() {
   [...karts].sort((a,b)=>b.progress-a.progress).forEach((k,i)=>k.pos=i+1);
 }
 
-// ─── DRAW HELPERS ─────────────────────────────────────────────────────────────
-function drawTrack(){
-  const pts=WP;
-  // curb (wide border)
-  ctx.strokeStyle='#888'; ctx.lineWidth=TRACK_W+22; ctx.lineCap='round'; ctx.lineJoin='round';
-  ctx.beginPath(); ctx.moveTo(pts[0].x,pts[0].y);
-  for(let i=1;i<NW;i++) ctx.lineTo(pts[i].x,pts[i].y);
-  ctx.closePath(); ctx.stroke();
+// ─── DRAW ────────────────────────────────────────────────────────────────────
+function drawTrack() {
+  function path() {
+    ctx.beginPath(); ctx.moveTo(WP[0].x,WP[0].y);
+    for (let i=1;i<NW;i++) ctx.lineTo(WP[i].x,WP[i].y);
+    ctx.closePath();
+  }
+  ctx.lineCap='round'; ctx.lineJoin='round';
+
+  // outer red/white curb
+  ctx.strokeStyle='#cc2200'; ctx.lineWidth=TRACK_W+28; path(); ctx.stroke();
+  // white stripe
+  ctx.strokeStyle='#ffffff'; ctx.lineWidth=TRACK_W+14; path(); ctx.stroke();
   // road surface
-  ctx.strokeStyle='#3a3a3a'; ctx.lineWidth=TRACK_W;
-  ctx.beginPath(); ctx.moveTo(pts[0].x,pts[0].y);
-  for(let i=1;i<NW;i++) ctx.lineTo(pts[i].x,pts[i].y);
-  ctx.closePath(); ctx.stroke();
-  // lane markings
-  ctx.strokeStyle='rgba(255,255,0,0.5)'; ctx.lineWidth=3; ctx.setLineDash([28,22]);
-  ctx.beginPath(); ctx.moveTo(pts[0].x,pts[0].y);
-  for(let i=1;i<NW;i++) ctx.lineTo(pts[i].x,pts[i].y);
-  ctx.closePath(); ctx.stroke();
+  ctx.strokeStyle='#3d3d3d'; ctx.lineWidth=TRACK_W; path(); ctx.stroke();
+  // center dashes
+  ctx.strokeStyle='rgba(255,240,0,0.55)'; ctx.lineWidth=3;
+  ctx.setLineDash([28,22]); path(); ctx.stroke();
   ctx.setLineDash([]);
-  // start/finish line
-  const sf=WP[0],sn=WP[1];
-  const sa=Math.atan2(sn.y-sf.y,sn.x-sf.x)+Math.PI/2;
-  ctx.save(); ctx.translate(sf.x,sf.y); ctx.rotate(sa);
-  for(let r=-4;r<4;r++) for(let c=0;c<7;c++){
-    ctx.fillStyle=(r+c)%2===0?'#fff':'#000';
-    ctx.fillRect(c*10-35,r*10-20,10,10);
+
+  // start/finish line (checkered)
+  const sf=WP[0], sn=WP[1];
+  const sa = Math.atan2(sn.y-sf.y, sn.x-sf.x) + Math.PI/2;
+  ctx.save(); ctx.translate(sf.x, sf.y); ctx.rotate(sa);
+  for (let r=-4;r<4;r++) for (let c=0;c<7;c++) {
+    ctx.fillStyle = (r+c)%2===0 ? '#fff' : '#000';
+    ctx.fillRect(c*10-35, r*10-20, 10, 10);
   }
   ctx.restore();
 }
 
-function drawBuildings(){
-  for(const b of buildings){
-    ctx.fillStyle=b.color;
-    ctx.fillRect(b.x,b.y,b.w,b.h);
-    ctx.fillStyle='rgba(255,250,160,0.55)';
-    for(const w of b.wins) if(w.on) ctx.fillRect(w.x,w.y,b.w/4-2,8);
-    // outline
-    ctx.strokeStyle='rgba(0,0,0,0.4)'; ctx.lineWidth=1.5;
-    ctx.strokeRect(b.x,b.y,b.w,b.h);
+function drawBuildings() {
+  for (const b of buildings) {
+    ctx.fillStyle = b.color;
+    ctx.fillRect(b.x, b.y, b.w, b.h);
+    ctx.fillStyle = 'rgba(255,250,160,0.55)';
+    for (const w of b.wins) if (w.on) ctx.fillRect(w.x, w.y, b.w/4-2, 8);
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth=1.5;
+    ctx.strokeRect(b.x, b.y, b.w, b.h);
   }
 }
 
-function drawPups(){
-  const t=Date.now()*0.003;
-  for(const p of pups){
-    if(p.gone) continue;
-    ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(t);
-    const g=ctx.createRadialGradient(0,0,0,0,0,22);
-    g.addColorStop(0,p.color+'cc'); g.addColorStop(1,'transparent');
+function drawPups() {
+  const t = Date.now()*0.003;
+  for (const p of pups) {
+    if (p.gone) continue;
+    ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(t);
+    const g = ctx.createRadialGradient(0,0,0,0,0,22);
+    g.addColorStop(0, p.color+'cc'); g.addColorStop(1,'transparent');
     ctx.fillStyle=g; ctx.beginPath(); ctx.arc(0,0,22,0,Math.PI*2); ctx.fill();
     ctx.fillStyle=p.color;
     ctx.beginPath();
-    for(let s=0;s<8;s++){
+    for (let s=0;s<8;s++) {
       const a=s/8*Math.PI*2, r=s%2===0?15:7;
-      s===0?ctx.moveTo(Math.cos(a)*r,Math.sin(a)*r):ctx.lineTo(Math.cos(a)*r,Math.sin(a)*r);
+      s===0 ? ctx.moveTo(Math.cos(a)*r,Math.sin(a)*r) : ctx.lineTo(Math.cos(a)*r,Math.sin(a)*r);
     }
     ctx.closePath(); ctx.fill();
     ctx.restore();
   }
 }
 
-function drawObs(){
-  for(const o of obs){
-    if(o.type==='cone'){
-      ctx.fillStyle='#ff6600';
-      ctx.beginPath(); ctx.moveTo(o.x,o.y-15); ctx.lineTo(o.x-9,o.y+9); ctx.lineTo(o.x+9,o.y+9); ctx.closePath(); ctx.fill();
-      ctx.fillStyle='#fff'; ctx.fillRect(o.x-9,o.y,18,4);
-    } else {
-      ctx.fillStyle='#cc0000'; ctx.fillRect(o.x-16,o.y-8,32,16);
-      ctx.fillStyle='#fff';
-      ctx.fillRect(o.x-16,o.y-8,10,16); ctx.fillRect(o.x+6,o.y-8,10,16);
-    }
-  }
+// Arrow on screen edge pointing toward next player waypoint
+function drawWaypointArrow(player) {
+  const tgt = WP[player.wp];
+  // direction from player to target in world space
+  const wx = tgt.x - player.x, wy = tgt.y - player.y;
+  const dist = Math.hypot(wx, wy);
+  if (dist < 80) return; // already there
+  const nx = wx/dist, ny = wy/dist;
+  // place arrow near center of screen, away from HUD
+  const cx = W/2, cy = H/2;
+  const r = 90; // distance from screen center
+  const ax = cx + nx*r, ay = cy + ny*r;
+  const ang = Math.atan2(ny, nx);
+  ctx.save();
+  ctx.translate(ax, ay); ctx.rotate(ang + Math.PI/2);
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.strokeStyle = '#333'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0,-16); ctx.lineTo(10,8); ctx.lineTo(0,2); ctx.lineTo(-10,8);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.restore();
 }
 
-function drawHUD(){
-  const p=karts[0];
-  // main panel
-  ctx.fillStyle='rgba(0,0,0,0.72)';
-  ctx.fillRect(10,10,190,130);
+function drawHUD() {
+  const p = karts[0];
+  // main stats panel
+  ctx.fillStyle='rgba(0,0,0,0.75)';
+  ctx.fillRect(10,10,195,135);
   ctx.strokeStyle='#ff6b00'; ctx.lineWidth=2;
-  ctx.strokeRect(10,10,190,130);
+  ctx.strokeRect(10,10,195,135);
+
   // speed
-  const mph=Math.abs(p.speed*19)|0;
-  ctx.fillStyle='#ff6b00'; ctx.font='bold 42px Arial Black'; ctx.textAlign='left';
-  ctx.fillText(mph,20,62);
-  ctx.fillStyle='#aaa'; ctx.font='13px Arial'; ctx.fillText('MPH',88,62);
+  const mph = Math.abs(p.speed*19)|0;
+  ctx.fillStyle='#ff6b00'; ctx.font='bold 44px Arial Black'; ctx.textAlign='left';
+  ctx.fillText(mph, 20, 64);
+  ctx.fillStyle='#aaa'; ctx.font='13px Arial'; ctx.fillText('MPH', 92, 64);
+
   // position
   ctx.fillStyle='#fff'; ctx.font='bold 28px Arial Black';
-  ctx.fillText(ordinal(p.pos),20,100);
-  // lap
-  ctx.fillStyle='#bbb'; ctx.font='13px Arial';
-  ctx.fillText(`LAP ${Math.min(p.lap+1,LAPS)} / ${LAPS}`,100,100);
-  // boost bar bg
-  ctx.fillStyle='#222'; ctx.fillRect(20,108,160,20);
-  // boost bar fill
-  const bc=p.boost?'#ffee00':p.boostBar>60?'#ff6b00':'#aa3300';
-  ctx.fillStyle=bc; ctx.fillRect(20,108,160*(p.boostBar/100),20);
-  ctx.strokeStyle='#555'; ctx.lineWidth=1; ctx.strokeRect(20,108,160,20);
+  ctx.fillText(ordinal(p.pos), 20, 100);
+
+  // lap counter — highlighted
+  const lapColor = '#ffee00';
+  ctx.fillStyle = lapColor; ctx.font = 'bold 16px Arial Black';
+  ctx.fillText(`LAP ${Math.min(p.lap+1,LAPS)} / ${LAPS}`, 100, 100);
+
+  // goal reminder
+  ctx.fillStyle='#888'; ctx.font='11px Arial';
+  ctx.fillText(`GOAL: finish ${LAPS} laps`, 20, 118);
+
+  // boost bar
+  ctx.fillStyle='#222'; ctx.fillRect(20,122,165,18);
+  const bc = p.boost?'#ffee00': p.boostBar>60?'#ff6b00':'#882200';
+  ctx.fillStyle=bc; ctx.fillRect(20,122,165*(p.boostBar/100),18);
+  ctx.strokeStyle='#555'; ctx.lineWidth=1; ctx.strokeRect(20,122,165,18);
   ctx.fillStyle='#fff'; ctx.font='bold 11px Arial'; ctx.textAlign='center';
-  ctx.fillText('TURBO [SHIFT]',100,122);
+  ctx.fillText('TURBO [SHIFT]', 102, 135);
+
+  // shield indicator
+  if (p.shield) {
+    ctx.fillStyle='#00aaff'; ctx.font='bold 13px Arial'; ctx.textAlign='left';
+    ctx.fillText('🛡 SHIELD', 20, 158);
+  }
 
   // leaderboard
-  const sorted=[...karts].sort((a,b)=>b.progress-a.progress);
-  ctx.fillStyle='rgba(0,0,0,0.72)';
+  const sorted = [...karts].sort((a,b)=>b.progress-a.progress);
+  ctx.fillStyle='rgba(0,0,0,0.75)';
   ctx.fillRect(W-135,10,125,karts.length*22+14);
   ctx.strokeStyle='#ff6b00'; ctx.lineWidth=2;
   ctx.strokeRect(W-135,10,125,karts.length*22+14);
   sorted.forEach((k,i)=>{
-    ctx.fillStyle=k.isP?'#ffee00':'#ddd';
-    ctx.font=`bold 12px Arial`; ctx.textAlign='left';
-    ctx.fillText(`${i+1}. ${KNAMES[k.ci]}`,W-126,28+i*22);
+    ctx.fillStyle = k.isP?'#ffee00':'#ddd';
+    ctx.font='bold 12px Arial'; ctx.textAlign='left';
+    ctx.fillText(`${i+1}. ${KNAMES[k.ci]}`, W-126, 28+i*22);
   });
+}
 
-  // shield indicator
-  if(p.shield){
-    ctx.fillStyle='#00aaff'; ctx.font='bold 13px Arial'; ctx.textAlign='left';
-    ctx.fillText('🛡 SHIELD ACTIVE',20,155);
+function drawMessages() {
+  for (const m of msgs) {
+    ctx.globalAlpha = Math.min(1, m.t/600);
+    ctx.fillStyle = m.color;
+    ctx.font = `bold ${m.size}px Arial Black`;
+    ctx.textAlign = 'center';
+    // outline for readability
+    ctx.strokeStyle='#000'; ctx.lineWidth=4;
+    ctx.strokeText(m.text, W/2, H/2-50);
+    ctx.fillText(m.text, W/2, H/2-50);
+    ctx.globalAlpha = 1;
   }
 }
 
-function drawMessages(){
-  for(const m of msgs){
-    ctx.globalAlpha=Math.min(1,m.t/600);
-    ctx.fillStyle=m.color; ctx.font='bold 34px Arial Black'; ctx.textAlign='center';
-    ctx.fillText(m.text,W/2,H/2-60);
-    ctx.globalAlpha=1;
-  }
-}
-
-function drawCountdown(){
+function drawCountdown() {
   ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(0,0,W,H);
-  const txt=cdNum>0?cdNum.toString():'GO!';
-  ctx.fillStyle=cdNum>0?'#ff4444':'#44ff88';
-  ctx.font='bold 90px Arial Black'; ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillText(txt,W/2,H/2);
+  const cdNum = cdTimer>3000?3 : cdTimer>2000?2 : cdTimer>1000?1 : 0;
+  const txt = cdNum>0 ? cdNum.toString() : 'GO!';
+  ctx.fillStyle = cdNum>0 ? '#ff4444' : '#44ff88';
+  ctx.font='bold 100px Arial Black'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(txt, W/2, H/2);
   ctx.textBaseline='alphabetic';
+  ctx.fillStyle='#bbb'; ctx.font='18px Arial';
+  ctx.fillText(`${LAPS} LAPS TO WIN — YELLOW STARS = POWER-UPS`, W/2, H/2+80);
 }
 
-function drawFinished(){
-  const p=karts[0];
-  ctx.fillStyle='rgba(0,0,0,0.78)'; ctx.fillRect(0,0,W,H);
-  ctx.fillStyle='#ffee00'; ctx.font='bold 54px Arial Black'; ctx.textAlign='center';
-  ctx.fillText('RACE FINISHED!',W/2,H/2-70);
-  const medal=['🥇','🥈','🥉','',''][p.pos-1]||'';
-  ctx.fillStyle='#fff'; ctx.font='bold 32px Arial';
-  ctx.fillText(`${medal} You finished ${ordinal(p.pos)}!`,W/2,H/2);
+function drawFinished() {
+  const p = karts[0];
+  ctx.fillStyle='rgba(0,0,0,0.8)'; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='#ffee00'; ctx.font='bold 56px Arial Black'; ctx.textAlign='center';
+  ctx.fillText('RACE FINISHED!', W/2, H/2-80);
+  const medal = ['🥇','🥈','🥉','4th','5th'][p.pos-1]||'';
+  ctx.fillStyle='#fff'; ctx.font='bold 34px Arial';
+  ctx.fillText(`${medal}  You finished ${ordinal(p.pos)}!`, W/2, H/2-10);
   ctx.fillStyle='#ff6b00'; ctx.font='20px Arial';
-  ctx.fillText('Press R to race again',W/2,H/2+55);
+  ctx.fillText('Press  R  to race again', W/2, H/2+50);
 }
 
 // ─── MAIN LOOP ────────────────────────────────────────────────────────────────
-function loop(ts){
-  const dt=Math.min(ts-lastT,50); lastT=ts;
-  const pl=karts[0];
+function loop(ts) {
+  const dt = Math.min(ts-lastT, 50); lastT=ts;
+  const pl = karts[0];
 
-  // smooth camera
-  cam.x+=(pl.x-cam.x)*0.1;
-  cam.y+=(pl.y-cam.y)*0.1;
+  cam.x += (pl.x - cam.x)*0.1;
+  cam.y += (pl.y - cam.y)*0.1;
 
-  // clear
+  // clear with grass
   ctx.fillStyle='#2a5e23'; ctx.fillRect(0,0,W,H);
 
-  // world transform
+  // world-space drawing
   ctx.save();
-  ctx.translate(W/2-cam.x, H/2-cam.y);
-
+  ctx.translate(W/2 - cam.x, H/2 - cam.y);
   drawBuildings();
   drawTrack();
-  drawObs();
   drawPups();
   karts.forEach(k=>k.draw());
-
   ctx.restore();
 
-  // update
-  if(state==='countdown'){
-    cdTimer-=dt;
-    cdNum=Math.max(0,Math.ceil(cdTimer/1000)-1+1); // 3,2,1 then GO
-    cdNum=cdTimer>3000?3:cdTimer>2000?2:cdTimer>1000?1:0;
-    if(cdTimer<=0) state='racing';
+  // update logic
+  if (state==='countdown') {
+    cdTimer -= dt;
+    if (cdTimer<=0) state='racing';
     drawCountdown();
-  } else if(state==='racing'){
-    for(const p of pups){ if(p.gone){ p.respawn-=dt; if(p.respawn<=0) p.gone=false; } }
-    karts.forEach(k=>{ k.update(keys,dt); k.hitPup(); k.hitObs(); });
+  } else if (state==='racing') {
+    for (const p of pups) { if (p.gone) { p.respawn-=dt; if(p.respawn<=0) p.gone=false; } }
+    karts.forEach(k=>{ k.update(keys,dt); k.hitPup(); });
     updatePositions();
-    if(pl.lap>=LAPS) state='finished';
-    for(let i=msgs.length-1;i>=0;i--){ msgs[i].t-=dt; if(msgs[i].t<=0) msgs.splice(i,1); }
+    if (pl.lap >= LAPS) state='finished';
+    for (let i=msgs.length-1; i>=0; i--) { msgs[i].t-=dt; if(msgs[i].t<=0) msgs.splice(i,1); }
   }
 
+  drawWaypointArrow(pl);
   drawHUD();
   drawMessages();
-  if(state==='finished') drawFinished();
+  if (state==='finished') drawFinished();
 
-  animId=requestAnimationFrame(loop);
+  animId = requestAnimationFrame(loop);
 }
 
 // ─── INPUT ────────────────────────────────────────────────────────────────────
-document.addEventListener('keydown',e=>{
+document.addEventListener('keydown', e=>{
   keys[e.code]=true;
-  if(e.code==='KeyR'&&state==='finished'){
+  if (e.code==='KeyR' && state==='finished') {
     cancelAnimationFrame(animId); init(); lastT=performance.now(); animId=requestAnimationFrame(loop);
   }
-  if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault();
+  if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault();
 });
-document.addEventListener('keyup',e=>{ keys[e.code]=false; });
+document.addEventListener('keyup', e=>{ keys[e.code]=false; });
 
 // ─── START ────────────────────────────────────────────────────────────────────
 init();
